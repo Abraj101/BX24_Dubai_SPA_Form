@@ -1,0 +1,12 @@
+{
+  "name": "bitrix24-dubai-forms",
+  "version": "1.1.0",
+  "description": "Dubai Booking Form and Dubai SPA Form generator tabs for Bitrix24 (South Lofts)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
