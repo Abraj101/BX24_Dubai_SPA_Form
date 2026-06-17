@@ -17,6 +17,7 @@
   .topbar button:disabled { opacity: .5; cursor: default; }
   .page { max-width: 210mm; margin: 16px auto; background: #fff; padding: 14mm 12mm;
           box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+  #coverPrev { display: block; width: 100%; margin: 0 0 16px; border: 1px solid #d5dbe0; }
 
   /* ── Rendered SPA document ── */
   #spaRoot { font-family: 'Times New Roman', Georgia, serif; font-size: 11px; line-height: 1.45; color: #000; }
@@ -47,7 +48,7 @@
     <span class="status" id="status">Loading…</span>
     <button id="attachBtn" disabled onclick="attachToDeal()">Attach to Deal</button>
   </div>
-  <div class="page"><div id="spaRoot"></div></div>
+  <div class="page"><img id="coverPrev" src="cover.png" alt="Cover page"><div id="spaRoot"></div></div>
 
 <script>
 /* ════════════════ CONFIG ════════════════ */
@@ -75,6 +76,21 @@ const D_BANK        = 'UF_CRM_1781467271543';
 const D_COMPLETION  = 'UF_CRM_1781467301674';
 const D_WITNESS     = 'UF_CRM_1781467320678';
 
+// UAE Resident (replaces Emirate) — same field/options as Booking Form
+const C_UAE_RESIDENT = 'UF_CRM_1781640051215';
+const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
+
+// Company purchaser fields (same as Booking Form)
+const CO_ADDRESS      = 'UF_CRM_1781650941705';
+const CO_CITY         = 'UF_CRM_1781647920524';
+const CO_COUNTRY      = 'UF_CRM_1781647935480';
+const CO_AUTHORITY    = 'UF_CRM_1781647957582';
+const CO_LICENSE      = 'UF_CRM_1781650776919';
+const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
+const CO_REP          = 'UF_CRM_1781648029271';
+const CO_REP_PASSPORT = 'UF_CRM_1781648051323';
+const CO_REP_PASS_EXP = 'UF_CRM_1781648066813';
+
 // Product (catalog) property IDs
 const PROD_TYPE = 177;   // Unit Type
 const PROD_AREA = 259;   // Area (per client: use 259, ignore template's 113)
@@ -83,6 +99,7 @@ const PROD_AREA = 259;   // Area (per client: use 259, ignore template's 113)
 const ADMIN_FEE = 5250;  // AED flat
 const DLD_RATE  = 0.04;  // 4% of purchase price (shown separately)
 const HANDOVER_MONTHS = 24;
+const FURNISHED_FEE = 25000; // AED, shown when Furnished is on (same as Booking Form)
 
 /* ════════════════ INSTALLMENT SCHEDULES (identical to Booking Form) ════════════════ */
 const SCHEDULES = {
@@ -326,29 +343,73 @@ function baseSchedule(plan, pj, booking, net) {
     return [];
 }
 function buildCustomSchedule(pj, net) {
+    const freqMap = { monthly: 1, quarterly: 3, biannually: 6, annually: 12 };
+    const pctOf = function(amt) { return net > 0 ? round2(amt / net * 100) : 0; };
+
     const dp  = toNumber(pj.downpaymentPct);
+    const dc  = toNumber(pj.duringConstructionPct);
     const pos = toNumber(pj.possessionPct);
-    const n   = Math.max(0, parseInt(pj.paymentPlanUnits, 10) || 0);
-    const freqMonths = ({ monthly:1, quarterly:3, biannually:6, annually:12 })[pj.innerPaymentPlan] || 1;
+
     const dpDate  = pj.downpaymentDate ? new Date(pj.downpaymentDate) : new Date();
     const posDate = pj.possessionDate ? new Date(pj.possessionDate) : null;
-    const rows = [];
-    rows.push({ label: 'Downpayment', pct: round2(dp), amount: round2(net * dp / 100),
-                dateStr: fmtDate(dpDate), ts: dpDate.getTime(), locked: true, instNo: null });
-    const instPctTotal = Math.max(0, 100 - dp - pos);
-    const each = n > 0 ? instPctTotal / n : 0;
-    for (let i = 1; i <= n; i++) {
-        const d = addMonths(dpDate, i * freqMonths);
-        rows.push({ label: ordinal(i) + ' Installment', pct: round2(each), amount: round2(net * each / 100),
-                    dateStr: fmtDate(d), ts: d.getTime(), locked: false, instNo: i });
+    const dcStart = pj.duringConstructionStartDate ? new Date(pj.duringConstructionStartDate) : dpDate;
+    const phStart = pj.postHandoverStartDate ? new Date(pj.postHandoverStartDate) : (posDate || dpDate);
+    const dcN = Math.max(0, parseInt(pj.duringConstructionPayments, 10) || 0);
+    const phN = Math.max(0, parseInt(pj.postHandoverPayments, 10) || 0);
+    const dcF = freqMap[pj.duringConstructionFreq] || 1;
+    const phF = freqMap[pj.postHandoverFreq] || 1;
+
+    const dpAmt  = round2(net * dp / 100);
+    const dcTot  = round2(net * dc / 100);
+    const posAmt = round2(net * pos / 100);
+    const phTot  = round2(net - dpAmt - dcTot - posAmt);   // remainder closes the plan to 100%
+
+    function split(total, count) {
+        const arr = []; let acc = 0; const each = count > 0 ? round2(total / count) : 0;
+        for (let i = 0; i < count; i++) {
+            const amt = (i === count - 1) ? round2(total - acc) : each;
+            arr.push(amt); acc = round2(acc + amt);
+        }
+        return arr;
     }
-    rows.push({ label: 'On Possession', pct: round2(pos), amount: round2(net * pos / 100),
+
+    const rows = [];
+    let instNo = 0;
+
+    // 1) Downpayment (locked, unnumbered)
+    rows.push({ label: 'Downpayment', pct: round2(dp), amount: dpAmt,
+                dateStr: fmtDate(dpDate), ts: dpDate.getTime(), locked: true, instNo: null });
+
+    // 2) During Construction installments (continuous numbering)
+    const dcAmts = split(dcTot, dcN);
+    for (let i = 0; i < dcN; i++) {
+        instNo++;
+        const d = addMonths(dcStart, i * dcF);
+        rows.push({ label: ordinal(instNo) + ' Installment', pct: pctOf(dcAmts[i]),
+                    amount: dcAmts[i], dateStr: fmtDate(d), ts: d.getTime(),
+                    locked: false, instNo: instNo });
+    }
+
+    // 3) On Possession (locked, unnumbered) — between the two installment phases
+    rows.push({ label: 'On Possession', pct: round2(pos), amount: posAmt,
                 dateStr: posDate ? fmtDate(posDate) : '\u2014',
-                ts: posDate ? posDate.getTime() : Number.MAX_SAFE_INTEGER, locked: true, instNo: null });
+                ts: posDate ? posDate.getTime() : null, locked: true, instNo: null });
+
+    // 4) Post Handover installments (numbering continues)
+    const phAmts = split(phTot, phN);
+    for (let j = 0; j < phN; j++) {
+        instNo++;
+        const d2 = addMonths(phStart, j * phF);
+        rows.push({ label: ordinal(instNo) + ' Installment', pct: pctOf(phAmts[j]),
+                    amount: phAmts[j], dateStr: fmtDate(d2), ts: d2.getTime(),
+                    locked: false, instNo: instNo });
+    }
+
     return rows;
 }
 function buildSchedule(plan, pj, booking, net) {
     const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+    if (plan === 'custom') return rows;   // custom keeps its fixed phase order (dates already ordered)
     return rows.map(function(r, i) { r._i = i; return r; })
         .sort(function(a, b) {
             const ta = (a.ts == null ? Number.MAX_SAFE_INTEGER : a.ts);
@@ -413,7 +474,16 @@ async function loadAll() {
     const plan = pj.paymentPlan || '';
 
     const contacts = await loadContacts();
-    const buyer = contacts[0] || null;
+
+    // Company (when the purchaser is a company rather than individuals)
+    let company = null;
+    const companyId = deal.COMPANY_ID;
+    if (companyId && parseInt(companyId, 10) > 0) {
+        try {
+            const coRes = await callBX('crm.company.get', { id: companyId });
+            company = coRes.result ? coRes.result : coRes;
+        } catch (e) { console.warn('[SPA] company load failed:', e); }
+    }
 
     let product = null, unitName = '';
     try {
@@ -426,7 +496,7 @@ async function loadAll() {
         }
     } catch (e) { console.warn('[SPA] product load failed (check catalog scope):', e); }
 
-    SPA_DATA = buildContext(deal, buyer, product, unitName, pj, plan);
+    SPA_DATA = buildContext(deal, contacts, company, product, unitName, pj, plan);
     await renderSpa(SPA_DATA);
     document.getElementById('attachBtn').disabled = false;
     setStatus('Ready — review, then Attach to Deal.');
@@ -452,8 +522,9 @@ async function loadContacts() {
         try {
             const cRes = await callBX('crm.contact.get', { id: cid });
             const c = cRes.result ? cRes.result : cRes;
-            const typeLabel = (typeMap[getUF(c, C_TYPE)] || '').toLowerCase();
-            c.__order = (typeLabel.indexOf('2') !== -1) ? 2 : (typeLabel.indexOf('1') !== -1 ? 1 : (i + 1));
+            const typeLabel = (typeMap[getUF(c, C_TYPE)] || '');
+            const m = typeLabel.match(/(\d+)/);
+            c.__order = m ? parseInt(m[1], 10) : (i + 1);
             loaded.push(c);
         } catch (e) { console.warn('[SPA] contact', cid, e); }
     }
@@ -468,7 +539,41 @@ function field(contact, deal, code) {
     if (v !== '' && v != null) return v;
     return getUF(deal, code);
 }
-function buildContext(deal, buyer, product, unitName, pj, plan) {
+function contactToPurchaser(c) {
+    if (!c) return null;
+    const name = [c.NAME, c.SECOND_NAME, c.LAST_NAME].filter(Boolean).join(' ').trim();
+    return {
+        name:        name,
+        address:     getUF(c, C_ADDRESS),
+        pobox:       getUF(c, C_POBOX),
+        uaeResident: UAE_RESIDENT_MAP[getUF(c, C_UAE_RESIDENT)] || '',
+        city:        getUF(c, C_CITY),
+        phone:       getMulti(c, 'PHONE'),
+        email:       getMulti(c, 'EMAIL'),
+        country:     getUF(c, C_COUNTRY),
+        nationality: getUF(c, C_NATIONALITY),
+        passport:    getUF(c, C_PASSPORT),
+        exp:         maybeDate(getUF(c, C_EXP))
+    };
+}
+function companyToObj(co) {
+    if (!co) return null;
+    return {
+        name:           co.TITLE || '',
+        address:        getUF(co, CO_ADDRESS),
+        city:           getUF(co, CO_CITY),
+        country:        getUF(co, CO_COUNTRY),
+        mobile:         getMulti(co, 'PHONE'),
+        email:          getMulti(co, 'EMAIL'),
+        authority:      getUF(co, CO_AUTHORITY),
+        license:        getUF(co, CO_LICENSE),
+        licenseExp:     maybeDate(getUF(co, CO_LICENSE_EXP)),
+        representor:    getUF(co, CO_REP),
+        repPassport:    getUF(co, CO_REP_PASSPORT),
+        repPassportExp: maybeDate(getUF(co, CO_REP_PASS_EXP))
+    };
+}
+function buildContext(deal, contacts, company, product, unitName, pj, plan) {
     const today = new Date();
     const discPct = toNumber(pj.discountPct);
     const net = toNumber(deal.OPPORTUNITY);
@@ -482,12 +587,27 @@ function buildContext(deal, buyer, product, unitName, pj, plan) {
     }
     if (!downpaymentAmt && schedule.length) downpaymentAmt = schedule[0].amount;
 
-    const buyerName = buyer ? [buyer.NAME, buyer.SECOND_NAME, buyer.LAST_NAME].filter(Boolean).join(' ').trim() : '';
+    const buyer = (contacts && contacts[0]) || null;          // primary contact (nominee + single-value fields)
+    const purchasers = (contacts || []).map(contactToPurchaser).filter(Boolean);
+    const companyObj = companyToObj(company);
+    const isCompany = !!companyObj;
+
+    // Contract body shows EVERY purchaser (joined). Company purchase -> company name/address.
+    const buyerName = isCompany ? companyObj.name
+        : purchasers.map(function(p) { return p.name; }).filter(Boolean).join(' & ');
+    const bodyAddress = isCompany ? companyObj.address
+        : purchasers.map(function(p) { return p.address; }).filter(Boolean).join(' & ');
+
     return {
-        today: today, deal: deal, buyer: buyer, product: product, pj: pj, plan: plan,
+        today: today, deal: deal, buyer: buyer, purchasers: purchasers,
+        company: companyObj, isCompany: isCompany,
+        product: product, pj: pj, plan: plan,
         net: net, purchasePrice: purchasePrice, discPct: discPct, discValue: discValue,
         dldFee: dldFee, adminFee: ADMIN_FEE, schedule: schedule,
-        downpaymentAmt: downpaymentAmt, buyerName: buyerName, unitName: unitName
+        furnished: (pj.furnished === 'Yes' || pj.furnished === true) ? 'Yes' : 'No',
+        downpaymentAmt: downpaymentAmt, buyerName: buyerName, bodyAddress: bodyAddress,
+        unitName: unitName,
+        spsl: 'SPSL-' + String(currentDealId).padStart(4, '0')
     };
 }
 
@@ -502,7 +622,7 @@ function buildEnMap(d) {
     const m = {};
     m['{DocumentCreateTime}']          = fmtDate(d.today);
     m['{UfCrm151776676644246}']        = d.buyerName;                          // Buyer Name
-    m['{UfCrm151776677178207}']        = field(c, deal, C_ADDRESS);            // Address
+    m['{UfCrm151776677178207}']        = d.bodyAddress;                        // Address (all purchasers / company)
     m['{UfCrm151776677041562}']        = field(c, deal, C_POBOX);             // P.O. Box
     m['{UfCrm151776408293897}']        = '';                                   // Emirate (removed)
     m['{UfCrm151776677095087}']        = field(c, deal, C_CITY);              // City
@@ -563,6 +683,8 @@ async function renderSpa(d) {
     Object.keys(enMap).forEach(function(token) {
         out = out.split(token).join(esc(enMap[token]));
     });
+    // 2b) Dynamic buyer rows (per purchaser, or company) — injected after token replacement
+    out = out.split('{{BUYER_ROWS}}').join(buyerRowsHtml(d));
 
     const root = document.getElementById('spaRoot');
     root.innerHTML = out;
@@ -570,6 +692,58 @@ async function renderSpa(d) {
     // 3) Schedule A installment table
     const slot = document.getElementById('scheduleA-installments');
     if (slot) slot.innerHTML = scheduleAHtml(d);
+}
+
+/* Build the APPLICANT DETAILS buyer rows: one bilingual block per purchaser
+   (UAE Resident replaces Emirate), or the company block. Nominee rows are
+   kept separately in the skeleton and are NOT touched here. */
+function buyerRowsHtml(d) {
+    function row(enL, enV, arV, arL, bold) {
+        const o = bold ? '<strong>' : '', z = bold ? '</strong>' : '';
+        return '<tr>' +
+            '<td><p>' + o + esc(enL) + z + '</p></td>' +
+            '<td><p>' + esc(enV) + '</p></td>' +
+            '<td><p class="ar-val" dir="rtl">' + esc(arV) + '</p></td>' +
+            '<td><p>' + o + arL + z + '</p></td></tr>';
+    }
+    if (d.isCompany && d.company) {
+        const co = d.company;
+        return row('Purchaser Type', 'Company', 'شركة', 'نوع المشتري', true) +
+            row('Company Name', co.name, co.name, 'اسم الشركة', true) +
+            row('Address', co.address, co.address, 'العنوان') +
+            row('City', co.city, arLookup(CITY_AR, co.city), 'مدينة') +
+            row('Country', co.country, arLookup(COUNTRY_AR, co.country), 'البلد') +
+            row('Phone/Mobile', co.mobile, co.mobile, 'الهاتف') +
+            row('Email', co.email, co.email, 'الايميل') +
+            row('Issuing Authority', co.authority, co.authority, 'جهة الإصدار') +
+            row('Trade License No.', co.license, co.license, 'رقم الرخصة التجارية') +
+            row('License Exp. Date', co.licenseExp, co.licenseExp, 'تاريخ انتهاء الرخصة') +
+            row('Representor', co.representor, co.representor, 'الممثل') +
+            row('Representor Passport No.', co.repPassport, co.repPassport, 'رقم جواز سفر الممثل') +
+            row('Representor Passport Exp.', co.repPassportExp, co.repPassportExp, 'تاريخ انتهاء جواز سفر الممثل');
+    }
+    const ps = (d.purchasers && d.purchasers.length) ? d.purchasers : [{
+        name: '', address: '', pobox: '', uaeResident: '', city: '', phone: '',
+        email: '', country: '', nationality: '', passport: '', exp: ''
+    }];
+    const multi = ps.length > 1;
+    let h = '';
+    ps.forEach(function(p, idx) {
+        if (multi) h += row('Purchaser ' + (idx + 1), '', '', 'المشتري ' + (idx + 1), true);
+        h += row('Buyer Name', p.name, p.name, 'اسم المشتري', true);
+        h += row('Address', p.address, p.address, 'العنوان');
+        h += row('P.O. Box', p.pobox, p.pobox, 'رقم صندوق البريد');
+        h += row('UAE Resident', p.uaeResident,
+                 (p.uaeResident === 'Yes' ? 'نعم' : (p.uaeResident === 'No' ? 'لا' : '')), 'مقيم في الإمارات');
+        h += row('City', p.city, arLookup(CITY_AR, p.city), 'مدينة');
+        h += row('Phone/Mobile', p.phone, p.phone, 'الهاتف');
+        h += row('Email', p.email, p.email, 'الايميل');
+        h += row('Country', p.country, arLookup(COUNTRY_AR, p.country), 'البلد');
+        h += row('Nationality', p.nationality, arLookup(NAT_AR, p.nationality), 'الجنسية');
+        h += row('Passport No.', p.passport, p.passport, 'رقم جواز السفر');
+        h += row('Exp. Date', p.exp, p.exp, 'تاريخ الانتهاء');
+    });
+    return h;
 }
 
 function scheduleAHtml(d) {
@@ -594,6 +768,7 @@ function scheduleAHtml(d) {
             '<div><b>Net Payable:</b> ' + money(d.net) + '</div>' +
             '<div><b>DLD Fee (4% of purchase price, payable separately):</b> ' + money(d.dldFee) + '</div>' +
             '<div><b>Admin Fee (payable separately):</b> ' + money(d.adminFee) + '</div>' +
+            '<div><b>Furnished:</b> ' + (d.furnished === 'Yes' ? 'Yes (' + money(FURNISHED_FEE) + ')' : 'No') + '</div>' +
         '</div>' +
         '<table class="schedA"><thead><tr>' +
             '<th>Installments</th><th>Payment Date</th><th>Payment %</th><th>Installment Amount (AED)</th>' +
@@ -601,27 +776,92 @@ function scheduleAHtml(d) {
 }
 
 /* ════════════════ ATTACH ════════════════ */
+// Load an image (same-origin static asset) into a dataURL + natural size for jsPDF.
+function loadImg(url, jpeg) {
+    return new Promise(function(resolve) {
+        const img = new Image();
+        img.onload = function() {
+            try {
+                const cv = document.createElement('canvas');
+                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                cv.getContext('2d').drawImage(img, 0, 0);
+                const fmt = jpeg ? 'image/jpeg' : 'image/png';
+                resolve({ dataUrl: cv.toDataURL(fmt, jpeg ? 0.85 : undefined),
+                          w: img.naturalWidth, h: img.naturalHeight, type: jpeg ? 'JPEG' : 'PNG' });
+            } catch (e) { resolve(null); }
+        };
+        img.onerror = function() { resolve(null); };
+        img.src = url;
+    });
+}
+
+// Header (SPSL ref + two logos) and footer (page no + buyer initials) on a body page.
+function drawHeaderFooter(pdf, pageNo, pageW, pageH, logoL, logoR, spsl) {
+    const m = 10;
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8); pdf.setTextColor(110);
+    pdf.text(spsl, m, 7);
+    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(0);
+    function place(logo, side) {
+        if (!logo || !logo.dataUrl) return;
+        let h = 11, w = h * (logo.w / logo.h);
+        if (w > 40) { w = 40; h = w / (logo.w / logo.h); }
+        const x = (side === 'L') ? m : (pageW - m - w);
+        const y = 14 - h / 2;
+        pdf.addImage(logo.dataUrl, logo.type, x, y, w, h);
+    }
+    place(logoL, 'L'); place(logoR, 'R');
+    pdf.setFontSize(9);
+    pdf.text('Page ' + pageNo, m, pageH - 8);
+    const initials = 'Buyer Initials: __________';
+    pdf.text(initials, pageW - m - pdf.getTextWidth(initials), pageH - 8);
+}
+
 async function attachToDeal() {
     const btn = document.getElementById('attachBtn');
     btn.disabled = true; btn.textContent = 'Generating PDF…';
     setStatus('Generating PDF (this can take a moment for a long document)…');
     try {
         const el = document.getElementById('spaRoot');
+        const spsl = (SPA_DATA && SPA_DATA.spsl) ? SPA_DATA.spsl : ('SPSL-' + String(currentDealId).padStart(4, '0'));
+
+        // Load cover + logos (same-origin assets served by the app)
+        const cover = await loadImg('cover.png', true);
+        const logoL = await loadImg('logo-pci.png', false);
+        const logoR = await loadImg('logo-southlofts.png', false);
+
         const opt = {
-            margin: [8, 8, 10, 8],
-            filename: 'Dubai_SPA_' + String(currentDealId) + '.pdf',
+            margin: [24, 10, 16, 10],   // top/left/bottom/right (mm): room for header + footer
             image: { type: 'jpeg', quality: 0.85 },
             html2canvas: { scale: 1.5, useCORS: true, backgroundColor: '#ffffff' },
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
             pagebreak: { mode: ['css', 'legacy'] }
         };
-        const dataUri = await html2pdf().set(opt).from(el).outputPdf('datauristring');
+
+        // Render body, then post-process the jsPDF instance
+        const pdf = await html2pdf().set(opt).from(el).toPdf().get('pdf');
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const bodyPages = pdf.internal.getNumberOfPages();
+
+        // Header/footer on each body page (numbered Page 1..N)
+        for (let i = 1; i <= bodyPages; i++) {
+            pdf.setPage(i);
+            drawHeaderFooter(pdf, i, pageW, pageH, logoL, logoR, spsl);
+        }
+
+        // Cover as the first page (no header/footer)
+        pdf.insertPage(1);
+        pdf.setPage(1);
+        if (cover && cover.dataUrl) pdf.addImage(cover.dataUrl, cover.type, 0, 0, pageW, pageH);
+
+        const dataUri = pdf.output('datauristring');
         const base64 = dataUri.split(',')[1];
 
         btn.textContent = 'Attaching…';
         setStatus('Uploading to the deal…');
+        const filename = 'Dubai_SPA_' + String(currentDealId) + '.pdf';
         const fields = {};
-        fields[SPA_FILE_FIELD] = { fileData: [opt.filename, base64] };
+        fields[SPA_FILE_FIELD] = { fileData: [filename, base64] };
         await callBX('crm.deal.update', { id: currentDealId, fields: fields });
 
         setStatus('\u2713 Attached to the SPA field on the General tab.');
