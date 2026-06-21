@@ -46,8 +46,19 @@
                       margin: 20px 0; }
   #spaRoot .sig-en { font-weight: 700; }
   #spaRoot .sig-ar { direction: rtl; text-align: right; font-weight: 700; }
+  /* Schedule A/B signatures: Seller left, Purchaser right */
+  #spaRoot .sig2 { display: flex; justify-content: space-between; margin: 26px 0 6px; }
+  #spaRoot .sig2-l { text-align: left; }
+  #spaRoot .sig2-r { text-align: right; }
+  /* ── Lists: strip the stray bullet wrappers, keep the numbered list ── */
+  #spaRoot ul { list-style: none; margin: 4px 0; padding-left: 0; }
+  #spaRoot ul > li { padding-left: 0; }
+  #spaRoot ol { margin: 4px 0; padding-left: 24px; }
+  #spaRoot li { margin: 3px 0; }
+  /* ── Keep these blocks from splitting across pages ── */
+  #spaRoot .avoid-block { page-break-inside: avoid; }
   /* ── Unit layout image (Schedule B) ── */
-  #spaRoot .unit-layout { text-align: center; margin: 8px 0; }
+  #spaRoot .unit-layout { text-align: center; margin: 8px 0; page-break-inside: avoid; }
   #spaRoot .unit-layout img { display: block; max-width: 100%; max-height: 150mm;
                               height: auto; margin: 0 auto; border: 1px solid #555; }
 </style>
@@ -70,12 +81,12 @@ const C_TYPE        = 'UF_CRM_1767876111269';     // enum Purchaser 1 / 2
 const C_ADDRESS     = 'UF_CRM_1767353184396';
 const C_POBOX       = 'UF_CRM_1781458421648';
 const C_CITY        = 'UF_CRM_1781458367322';
-const C_COUNTRY     = 'UF_CRM_1781458379196';
-const C_NATIONALITY = 'UF_CRM_1767691283';
+const C_COUNTRY     = 'UF_CRM_1782082896172';   // dropdown
+const C_NATIONALITY = 'UF_CRM_1782082979787';   // dropdown
 const C_PASSPORT    = 'UF_CRM_1766983512371';
 const C_EXP         = 'UF_CRM_1781656252906';
 const C_NOM_NAME    = 'UF_CRM_1781467071988';
-const C_NOM_NAT     = 'UF_CRM_1781467099554';
+const C_NOM_NAT     = 'UF_CRM_1782082822843';   // dropdown
 const C_NOM_PASS    = 'UF_CRM_1781648170181';
 const C_NOM_EXP     = 'UF_CRM_1781467149267';
 
@@ -93,7 +104,7 @@ const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
 // Company purchaser fields (same as Booking Form)
 const CO_ADDRESS      = 'UF_CRM_1781650941705';
 const CO_CITY         = 'UF_CRM_1781647920524';
-const CO_COUNTRY      = 'UF_CRM_1781647935480';
+const CO_COUNTRY      = 'UF_CRM_1782083162901';   // dropdown
 const CO_AUTHORITY    = 'UF_CRM_1781647957582';
 const CO_LICENSE      = 'UF_CRM_1781650776919';
 const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
@@ -110,6 +121,21 @@ const SQFT_TO_SQM = 0.09290304;   // area is stored in SqFt; SPA shows SqM
 // Same-origin image proxy (Express route in server.js — /image-proxy)
 const IMAGE_PROXY = '/image-proxy?url=';
 let PAYMODE_MAP = {};   // deal payment-mode enum: option id -> label (fetched at load)
+let ENUM_MAPS = {};     // generic enum maps for contact/company dropdown fields
+async function loadEnum(entity, fieldCode) {
+    try {
+        const res = await callBX('crm.' + entity + '.userfield.list', { filter: { FIELD_NAME: fieldCode } });
+        const ufs = Array.isArray(res) ? res : (res.result || []);
+        if (ufs.length && ufs[0].LIST) {
+            const m = {}; ufs[0].LIST.forEach(function(o) { m[o.ID] = o.VALUE; });
+            ENUM_MAPS[fieldCode] = m;
+        }
+    } catch (e) { /* leave unresolved -> raw id */ }
+}
+function enumVal(fieldCode, id) {
+    const m = ENUM_MAPS[fieldCode];
+    return id ? ((m && m[id]) ? m[id] : id) : '';
+}
 
 // Fees / assumptions
 const ADMIN_FEE = 5250;  // AED flat
@@ -531,6 +557,14 @@ async function loadAll() {
         }
     } catch (e) { /* fall back to raw id */ }
 
+    // Dropdown enum maps (nationality/country are now list fields)
+    await Promise.all([
+        loadEnum('contact', C_NATIONALITY),
+        loadEnum('contact', C_COUNTRY),
+        loadEnum('contact', C_NOM_NAT),
+        loadEnum('company', CO_COUNTRY)
+    ]);
+
     SPA_DATA = buildContext(deal, contacts, company, product, unitName, pj, plan, unitImage);
     await renderSpa(SPA_DATA);
     document.getElementById('attachBtn').disabled = false;
@@ -585,8 +619,8 @@ function contactToPurchaser(c) {
         city:        getUF(c, C_CITY),
         phone:       getMulti(c, 'PHONE'),
         email:       getMulti(c, 'EMAIL'),
-        country:     getUF(c, C_COUNTRY),
-        nationality: getUF(c, C_NATIONALITY),
+        country:     enumVal(C_COUNTRY, getUF(c, C_COUNTRY)),
+        nationality: enumVal(C_NATIONALITY, getUF(c, C_NATIONALITY)),
         passport:    getUF(c, C_PASSPORT),
         exp:         maybeDate(getUF(c, C_EXP))
     };
@@ -597,7 +631,7 @@ function companyToObj(co) {
         name:           co.TITLE || '',
         address:        getUF(co, CO_ADDRESS),
         city:           getUF(co, CO_CITY),
-        country:        getUF(co, CO_COUNTRY),
+        country:        enumVal(CO_COUNTRY, getUF(co, CO_COUNTRY)),
         mobile:         getMulti(co, 'PHONE'),
         email:          getMulti(co, 'EMAIL'),
         authority:      getUF(co, CO_AUTHORITY),
@@ -750,7 +784,7 @@ function buildEnMap(d) {
     m['{UfCrm151776677008771}']        = field(c, deal, C_PASSPORT);          // Passport No
     m['{UfCrm151778950639813}']        = maybeDate(field(c, deal, C_EXP));     // Exp Date
     m['{UfCrm151778950656579}']        = field(c, deal, C_NOM_NAME);          // Nominee Name
-    m['{UfCrm151778950670679}']        = field(c, deal, C_NOM_NAT);           // Nominee Nationality
+    m['{UfCrm151778950670679}']        = enumVal(C_NOM_NAT, field(c, deal, C_NOM_NAT)); // Nominee Nationality
     m['{UfCrm151778950686842}']        = field(c, deal, C_NOM_PASS);          // Nominee Passport
     m['{UfCrm151778950699925}']        = maybeDate(field(c, deal, C_NOM_EXP)); // Nominee Exp
     m['{ProductsProductTitle}']        = d.unitName;                          // Unit No
@@ -823,7 +857,7 @@ async function renderSpa(d) {
         if (arRe.test(el.textContent || '')) { el.style.direction = 'rtl'; el.style.textAlign = 'right'; }
     });
 
-    // 5) Centre the schedule headings and their bold subtitles
+    // 5) Centre the schedule headings and their bold subtitles; start each schedule on a new page
     root.querySelectorAll('p, h2, h3').forEach(function(el) {
         const t = (el.textContent || '').trim();
         if (/^SCHEDULE [A-F]\b/i.test(t) ||
@@ -833,6 +867,10 @@ async function renderSpa(d) {
             /^Declaration of Acceptance/i.test(t) ||
             /^THE DECLARATION OF/i.test(t)) {
             el.style.textAlign = 'center';
+        }
+        if (/^SCHEDULE [A-F]\s*$/i.test(t)) {
+            el.style.pageBreakBefore = 'always';
+            el.style.breakBefore = 'page';
         }
     });
 }
@@ -951,7 +989,7 @@ function drawHeaderFooter(pdf, pageNo, pageW, pageH, logoL, logoR, spsl) {
         pdf.addImage(logo.dataUrl, logo.type, x, y, w, h);
     }
     place(logoL, 'L', 12, 42);   // Premier Choice (wide)
-    place(logoR, 'R', 18, 48);   // Southlofts — larger so it reads clearly
+    place(logoR, 'R', 18, 58);   // Southlofts — trimmed + larger so it reads clearly
     pdf.setFontSize(9);
     pdf.text('Page ' + pageNo, m, pageH - 8);
     const initials = 'Buyer Initials: __________';
@@ -976,7 +1014,7 @@ async function attachToDeal() {
             image: { type: 'jpeg', quality: 0.85 },
             html2canvas: { scale: 1.5, useCORS: true, backgroundColor: '#ffffff' },
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak: { mode: ['css', 'legacy'] }
+            pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.avoid-block', '.unit-layout', 'img'] }
         };
 
         // Render body, then post-process the jsPDF instance
