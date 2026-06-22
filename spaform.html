@@ -80,7 +80,9 @@ const JSON_FIELD     = 'UF_CRM_1781355927497';   // payment-plan JSON on the dea
 const SPA_FILE_FIELD = 'UF_CRM_1781467358140';   // file field to attach the SPA PDF
 
 // Contact fields
-const C_TYPE        = 'UF_CRM_1767876111269';     // enum Purchaser 1 / 2
+const C_TYPE        = 'UF_CRM_1767876111269';     // enum Purchaser 1 / 2 / Minor
+const C_TYPE_MINOR  = '1353';                      // enum id of the "Minor" option
+const C_GUARDIAN_NAME = 'UF_CRM_1782067857222';    // Guardian's Name (shown when Minor)
 const C_ADDRESS     = 'UF_CRM_1767353184396';
 const C_POBOX       = 'UF_CRM_1781458421648';
 const C_CITY        = 'UF_CRM_1781458367322';
@@ -312,15 +314,6 @@ function getProp(product, id) {
 }
 function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
 function round2(n) { return Math.round(n * 100) / 100; }
-function cleanAddress(raw) {
-    if (raw == null) return '';
-    let s = String(raw);
-    if (s.indexOf('|;|') === -1) return s.trim();
-    let parts = s.split('|;|').map(function(x) { return x.trim(); });
-    while (parts.length && /^\d+$/.test(parts[parts.length - 1])) parts.pop();  // drop trailing loc id(s)
-    return parts.filter(Boolean).join(', ');
-}
-
 function parseInstNo(label) {
     const m = String(label).match(/^(\d+)(st|nd|rd|th)\s+Installment/i);
     return m ? parseInt(m[1], 10) : null;
@@ -640,7 +633,9 @@ function contactToPurchaser(c) {
     const name = [c.NAME, c.SECOND_NAME, c.LAST_NAME].filter(Boolean).join(' ').trim();
     return {
         name:        name,
-        address:     cleanAddress(getUF(c, C_ADDRESS)),
+        isMinor:     String(getUF(c, C_TYPE)) === C_TYPE_MINOR,
+        guardianName: getUF(c, C_GUARDIAN_NAME),
+        address:     getUF(c, C_ADDRESS),
         pobox:       getUF(c, C_POBOX),
         uaeResident: UAE_RESIDENT_MAP[getUF(c, C_UAE_RESIDENT)] || '',
         city:        getUF(c, C_CITY),
@@ -656,7 +651,7 @@ function companyToObj(co) {
     if (!co) return null;
     return {
         name:           co.TITLE || '',
-        address:        cleanAddress(getUF(co, CO_ADDRESS)),
+        address:        getUF(co, CO_ADDRESS),
         city:           getUF(co, CO_CITY),
         country:        enumVal(CO_COUNTRY, getUF(co, CO_COUNTRY)),
         mobile:         getMulti(co, 'PHONE'),
@@ -948,7 +943,28 @@ function buyerRowsHtml(d) {
     const multi = ps.length > 1;
     let h = '';
     ps.forEach(function(p, idx) {
-        if (multi) h += row('Purchaser ' + (idx + 1), '', '', 'المشتري ' + (idx + 1), true);
+        const n = idx + 1;
+        if (p.isMinor) {
+            // Minor purchaser: show "(Minor)", keep the minor's name, add Guardian's Name,
+            // then the remaining fields relabelled as the Guardian's (English + Arabic).
+            h += row(multi ? ('Purchaser ' + n + ' (Minor)') : 'Purchaser (Minor)', '', '',
+                     multi ? ('المشتري ' + n + ' (قاصر)') : 'المشتري (قاصر)', true);
+            h += row('Buyer Name', p.name, p.name, 'اسم المشتري', true);
+            h += row('Guardian\u2019s Name', p.guardianName, p.guardianName, 'اسم ولي الأمر', true);
+            h += row('Guardian\u2019s Address', p.address, p.address, 'عنوان ولي الأمر');
+            h += row('Guardian\u2019s P.O. Box', p.pobox, p.pobox, 'صندوق بريد ولي الأمر');
+            h += row('Guardian\u2019s UAE Resident', p.uaeResident,
+                     (p.uaeResident === 'Yes' ? 'نعم' : (p.uaeResident === 'No' ? 'لا' : '')), 'ولي الأمر مقيم في الإمارات');
+            h += row('Guardian\u2019s City', p.city, arLookup(CITY_AR, p.city), 'مدينة ولي الأمر');
+            h += row('Guardian\u2019s Phone/Mobile', p.phone, p.phone, 'هاتف ولي الأمر');
+            h += row('Guardian\u2019s Email', p.email, p.email, 'البريد الإلكتروني لولي الأمر');
+            h += row('Guardian\u2019s Country', p.country, arLookup(COUNTRY_AR, p.country), 'بلد ولي الأمر');
+            h += row('Guardian\u2019s Nationality', p.nationality, arLookup(NAT_AR, p.nationality), 'جنسية ولي الأمر');
+            h += row('Guardian\u2019s Passport No.', p.passport, p.passport, 'رقم جواز سفر ولي الأمر');
+            h += row('Guardian\u2019s Exp. Date', p.exp, p.exp, 'تاريخ انتهاء جواز سفر ولي الأمر');
+            return;
+        }
+        if (multi) h += row('Purchaser ' + n, '', '', 'المشتري ' + n, true);
         h += row('Buyer Name', p.name, p.name, 'اسم المشتري', true);
         h += row('Address', p.address, p.address, 'العنوان');
         h += row('P.O. Box', p.pobox, p.pobox, 'رقم صندوق البريد');
