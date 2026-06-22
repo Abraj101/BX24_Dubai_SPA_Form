@@ -83,6 +83,7 @@ const SPA_FILE_FIELD = 'UF_CRM_1781467358140';   // file field to attach the SPA
 const C_TYPE        = 'UF_CRM_1767876111269';     // enum Purchaser 1 / 2 / Minor
 const C_TYPE_MINOR  = '1353';                      // enum id of the "Minor" option
 const C_GUARDIAN_NAME = 'UF_CRM_1782067857222';    // Guardian's Name (shown when Minor)
+const C_OWNERSHIP   = 'UF_CRM_1782163950371';     // Ownership % (shown when multiple purchasers)
 const C_ADDRESS     = 'UF_CRM_1767353184396';
 const C_POBOX       = 'UF_CRM_1781458421648';
 const C_CITY        = 'UF_CRM_1781458367322';
@@ -640,6 +641,7 @@ function contactToPurchaser(c) {
         name:        name,
         isMinor:     String(getUF(c, C_TYPE)) === C_TYPE_MINOR,
         guardianName: getUF(c, C_GUARDIAN_NAME),
+        ownership:   getUF(c, C_OWNERSHIP),
         address:     getUF(c, C_ADDRESS),
         pobox:       getUF(c, C_POBOX),
         uaeResident: UAE_RESIDENT_MAP[getUF(c, C_UAE_RESIDENT)] || '',
@@ -985,6 +987,10 @@ function buyerRowsHtml(d) {
         }
         if (multi) h += row('Purchaser ' + n, '', '', 'المشتري ' + n, true);
         h += row('Buyer Name', p.name, p.name, 'اسم المشتري', true);
+        if (multi) {
+            const own = p.ownership ? (String(p.ownership).indexOf('%') >= 0 ? p.ownership : p.ownership + '%') : '';
+            h += row('Ownership %', own, own, 'نسبة الملكية');
+        }
         h += row('Address', p.address, p.address, 'العنوان');
         h += row('P.O. Box', p.pobox, p.pobox, 'رقم صندوق البريد');
         h += row('UAE Resident', p.uaeResident,
