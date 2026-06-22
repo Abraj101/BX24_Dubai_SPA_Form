@@ -2,14 +2,11 @@ const express   = require('express');
 const path      = require('path');
 const fs        = require('fs');
 const https     = require('https');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 const { PDFDocument } = require('pdf-lib');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
-
-// Chromium binary. Installed via nixpacks.toml (aptPkgs: chromium) at /usr/bin/chromium.
-const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
@@ -71,11 +68,16 @@ app.post('/render-pdf', async (req, res) => {
 
     let browser;
     try {
-        browser = await puppeteer.launch({
-            executablePath: CHROME_PATH,
+        const launchOpts = {
             headless: 'new',
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+        };
+        // Full puppeteer ships its own Chromium and finds it automatically. Only
+        // override the path if an explicit one is provided via the environment.
+        if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        }
+        browser = await puppeteer.launch(launchOpts);
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60000 });
 
