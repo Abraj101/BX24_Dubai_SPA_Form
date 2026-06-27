@@ -270,8 +270,11 @@ function toNumber(raw) {
     const n = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
     return isNaN(n) ? 0 : n;
 }
+function amount(n) {
+    return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 function money(n) {
-    return 'AED ' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return 'AED ' + amount(n);
 }
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtDate(d) { return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(); }
@@ -644,6 +647,10 @@ function field(contact, deal, code) {
     if (v !== '' && v != null) return v;
     return getUF(deal, code);
 }
+// Empty -> "N/A" (used for nominee fields so blank blocks read clearly)
+function naIfEmpty(v) {
+    return (v == null || String(v).trim() === '') ? 'N/A' : v;
+}
 function contactToPurchaser(c) {
     if (!c) return null;
     const name = [c.NAME, c.SECOND_NAME, c.LAST_NAME].filter(Boolean).join(' ').trim();
@@ -825,10 +832,10 @@ function buildEnMap(d) {
     m['{UfCrm151776676964285}']        = enumVal(C_NATIONALITY, field(c, deal, C_NATIONALITY)); // Nationality
     m['{UfCrm151776677008771}']        = field(c, deal, C_PASSPORT);          // Passport No
     m['{UfCrm151778950639813}']        = maybeDate(field(c, deal, C_EXP));     // Exp Date
-    m['{UfCrm151778950656579}']        = field(c, deal, C_NOM_NAME);          // Nominee Name
-    m['{UfCrm151778950670679}']        = enumVal(C_NOM_NAT, field(c, deal, C_NOM_NAT)); // Nominee Nationality
-    m['{UfCrm151778950686842}']        = field(c, deal, C_NOM_PASS);          // Nominee Passport
-    m['{UfCrm151778950699925}']        = maybeDate(field(c, deal, C_NOM_EXP)); // Nominee Exp
+    m['{UfCrm151778950656579}']        = naIfEmpty(field(c, deal, C_NOM_NAME));          // Nominee Name
+    m['{UfCrm151778950670679}']        = naIfEmpty(enumVal(C_NOM_NAT, field(c, deal, C_NOM_NAT))); // Nominee Nationality
+    m['{UfCrm151778950686842}']        = naIfEmpty(field(c, deal, C_NOM_PASS));          // Nominee Passport
+    m['{UfCrm151778950699925}']        = naIfEmpty(maybeDate(field(c, deal, C_NOM_EXP))); // Nominee Exp
     m['{ProductsProductTitle}']        = d.unitName;                          // Unit No
     m['{UfCrm151778950723706}']        = field(c, deal, D_PARKING);           // Parking
     m['{ProductsProductProperty113}']  = sqftToSqm(getProp(d.product, PROD_AREA)); // Area in SqM
@@ -837,7 +844,7 @@ function buildEnMap(d) {
     m['{UfCrm151778950758041}']        = (numToWordsEN(d.net) + ' UAE Dirhams Only').trim();  // Total in words
     m['{UfCrm151778950818534}']        = resolvePayMode(field(c, deal, D_PAYMODE)); // Payment Mode (label)
     m['{DOWNPAYMENT_AMOUNT}']          = money(d.downpaymentAmt);             // actual down payment
-    m['{UfCrm151778937940306}']        = money(d.net);                        // Total Sale Price (numeric)
+    m['{UfCrm151778937940306}']        = amount(d.net);                       // Total Purchase Price (amount only; cell header is "Total: (AED)")
     m['{UfCrm151778950836438}']        = field(c, deal, D_BANK);              // Bank
     m['{UfCrm151778951218364}']        = maybeDate(field(c, deal, D_COMPLETION)); // Anticipated Completion
     m['{UfCrm151778953417705}']        = field(c, deal, D_WITNESS);           // Witness Name
