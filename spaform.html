@@ -1083,7 +1083,7 @@ function buyerRowsHtml(d) {
             row('Address', co.address, arText(co.address), 'العنوان') +
             row('City', co.city, arText(co.city, CITY_AR), 'مدينة') +
             row('Country', co.country, arText(co.country, COUNTRY_AR), 'البلد') +
-            row('Phone/Mobile', co.mobile, co.mobile, 'الهاتف') +
+            row('Phone/Mobile', co.mobile, arabicDigits(co.mobile), 'الهاتف') +
             row('Email', co.email, co.email, 'الايميل') +
             row('Dubai Incorporated', co.uaeIncorp,
                 (co.uaeIncorp === 'Yes' ? 'نعم' : (co.uaeIncorp === 'No' ? 'لا' : '')), 'مؤسسة في دبي') +
