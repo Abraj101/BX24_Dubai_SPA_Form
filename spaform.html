@@ -124,7 +124,6 @@ const ZONE_MAP        = { '1359': 'Free Zone', '1361': 'Main Land Company' };
 
 // Product (catalog) property IDs
 const PROD_TYPE = 177;   // Unit Type
-const PROD_UNITNO = 107; // Unit No (property_107_text, e.g. "101")
 const PROD_AREA = 259;   // Area (per client: use 259, ignore template's 113)
 const PROD_FLOOR = 261;  // Floor
 const SQFT_TO_SQM = 0.09290304;   // area is stored in SqFt; SPA shows SqM
@@ -250,50 +249,119 @@ function arLookup(table, en) {
     return table[k] || en;   // fall back to English when not in the lookup
 }
 
-// ── Live EN→AR translation (via /translate proxy in server.js) ──
-let AR_TR = {};   // english value -> arabic
-async function translateBatch(texts) {
-    const uniq = [], seen = {};
-    texts.forEach(function(t) {
-        const k = String(t == null ? '' : t).trim();
-        if (!k || seen[k]) return;
-        if (k === 'N/A' || !/[A-Za-z]/.test(k)) return;   // skip N/A, numbers, dates, symbols
-        if (AR_TR[k] !== undefined) return;
-        seen[k] = 1; uniq.push(k);
-    });
-    if (!uniq.length) return;
-    try {
-        const resp = await fetch('/translate', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ texts: uniq })
-        });
-        const data = await resp.json();
-        const tr = (data && data.translations) || {};
-        Object.keys(tr).forEach(function(k) { AR_TR[k] = tr[k] || ''; });
-    } catch (e) { console.warn('[SPA] translate failed:', e); }
+// ── Offline phonetic transliteration (Latin -> Arabic by sound) ──
+// Used for proper nouns: name, address, authority, representative, nominee name.
+// City/Country/Nationality keep their proper-Arabic lookups (translit is only their fallback).
+
+// Common words rendered by hand for better quality; the rule engine handles the rest.
+const TRANSLIT_DICT = {
+    'one':'وان','of':'أوف','the':'ذا','and':'اند','for':'فور','to':'تو',
+    'luxury':'لاكشري','residence':'ريزيدنس','residences':'ريزيدنسز','drive':'درايف',
+    'business':'بزنس','bay':'باي','street':'ستريت','road':'رود','avenue':'أفينيو',
+    'boulevard':'بوليفارد','lane':'لين','tower':'تاور','towers':'تاورز','building':'بيلدنغ',
+    'floor':'فلور','apartment':'أبارتمنت','apartments':'أبارتمنتس','villa':'فيلا','villas':'فيلاز',
+    'unit':'يونت','suite':'سويت','plaza':'بلازا','mall':'مول','marina':'مارينا',
+    'downtown':'داون تاون','district':'ديستركت','zone':'زون','zones':'زونز','area':'إيريا',
+    'block':'بلوك','gate':'غيت','square':'سكوير','view':'فيو','views':'فيوز','heights':'هايتس',
+    'park':'بارك','garden':'غاردن','gardens':'غاردنز','court':'كورت','hills':'هيلز','estate':'إستيت',
+    'point':'بوينت','place':'بليس','center':'سنتر','centre':'سنتر','city':'سيتي','hotel':'هوتيل',
+    'palace':'بالاس','beach':'بيتش','island':'آيلاند','creek':'كريك','harbour':'هاربر','harbor':'هاربر',
+    'bridge':'بريدج','dubai':'دبي','abu':'أبو','dhabi':'ظبي','sharjah':'الشارقة','ajman':'عجمان',
+    'al':'ال','bin':'بن','jumeirah':'جميرا','deira':'ديرة','barsha':'برشا',
+    'integrated':'إنتغريتد','economic':'إيكونوميك','development':'ديفيلوبمنت','authority':'أثوريتي',
+    'free':'فري','international':'إنترناشونال','global':'غلوبال','holding':'هولدنغ','group':'غروب',
+    'llc':'إل إل سي','fzco':'إف زد سي أو','fze':'إف زد إي','fz':'إف زد','ltd':'إل تي دي','inc':'إنك','co':'كو'
+};
+
+// English letter names — only used for a single letter that follows digits (e.g. unit "3004B")
+const LETTER_NAMES = {
+    'a':'إيه','b':'بي','c':'سي','d':'دي','e':'إي','f':'إف','g':'جي','h':'إتش','i':'آي','j':'جاي',
+    'k':'كاي','l':'إل','m':'إم','n':'إن','o':'أو','p':'بي','q':'كيو','r':'آر','s':'إس','t':'تي',
+    'u':'يو','v':'في','w':'دبليو','x':'إكس','y':'واي','z':'زد'
+};
+
+function translitWord(w) {
+    // collapse doubled consonants (English "tt","ll","mm" = one Arabic letter)
+    const s = String(w).toLowerCase().replace(/([bcdfghjklmnpqrstvwxz])\1+/g, '$1');
+    const n = s.length;
+    const dig = { 'sh':'ش','ch':'تش','th':'ث','ph':'ف','gh':'غ','kh':'خ','ck':'ك','qu':'كو',
+        'wh':'و','oo':'و','ee':'ي','ea':'ي','ou':'او','ow':'او','au':'او','aw':'او',
+        'ai':'اي','ay':'اي','ei':'اي','ey':'اي','oa':'و','oy':'وي','oi':'وي' };
+    let res = '', i = 0;
+    while (i < n) {
+        const c3 = s.substr(i, 3), c2 = s.substr(i, 2), ch = s[i], next = s[i + 1] || '';
+        if (c3 === 'tch') { res += 'تش'; i += 3; continue; }
+        if (dig[c2]) { res += dig[c2]; i += 2; continue; }
+        const atStart = (i === 0);
+        switch (ch) {
+            case 'a': res += 'ا'; break;
+            case 'b': res += 'ب'; break;
+            case 'c': res += ('eiy'.indexOf(next) >= 0) ? 'س' : 'ك'; break;
+            case 'd': res += 'د'; break;
+            case 'e': if (atStart) res += 'إي'; else if (!(i === n - 1 && n > 2)) res += 'ي'; break;
+            case 'f': res += 'ف'; break;
+            case 'g': res += 'غ'; break;
+            case 'h': res += 'ه'; break;
+            case 'i': res += atStart ? 'إي' : 'ي'; break;
+            case 'j': res += 'ج'; break;
+            case 'k': res += 'ك'; break;
+            case 'l': res += 'ل'; break;
+            case 'm': res += 'م'; break;
+            case 'n': res += 'ن'; break;
+            case 'o': res += atStart ? 'أو' : 'و'; break;
+            case 'p': res += 'ب'; break;
+            case 'q': res += 'ق'; break;
+            case 'r': res += 'ر'; break;
+            case 's': res += 'س'; break;
+            case 't': res += 'ت'; break;
+            case 'u': res += atStart ? 'أو' : 'و'; break;
+            case 'v': res += 'ف'; break;
+            case 'w': res += 'و'; break;
+            case 'x': res += 'كس'; break;
+            case 'y': res += 'ي'; break;
+            case 'z': res += 'ز'; break;
+            default:  res += ch;   // keep apostrophes / unknown marks
+        }
+        i++;
+    }
+    return res;
 }
-// Arabic for a text value: API translation -> lookup table -> original (Latin) last resort
+
+// Transliterate a full string: words by sound, digits -> Arabic-Indic, separators preserved.
+function translit(text) {
+    if (text == null) return '';
+    const s = String(text);
+    if (!s.trim()) return '';
+    const re = /(\d+)|([A-Za-z]+(?:['\u2019][A-Za-z]+)?)|([^\dA-Za-z]+)/g;
+    let out = '', m, prevType = null;
+    while ((m = re.exec(s)) !== null) {
+        if (m[1] != null) {                       // digits
+            out += arabicDigits(m[1]); prevType = 'd';
+        } else if (m[2] != null) {                // word
+            const w = m[2], key = w.toLowerCase().replace(/\u2019/g, "'");
+            if (TRANSLIT_DICT[key] != null) out += TRANSLIT_DICT[key];
+            else if (w.length === 1 && prevType === 'd') out += ' ' + (LETTER_NAMES[w.toLowerCase()] || translitWord(w));
+            else out += translitWord(w);
+            prevType = 'l';
+        } else {                                  // separators (space, comma, hyphen…)
+            out += m[3].replace(/,/g, '\u060C'); prevType = 'o';   // ASCII comma -> Arabic comma
+        }
+    }
+    return out;
+}
+
+// Arabic for a text value.
+//   table given (city/country/nationality): proper-Arabic lookup first, phonetic as fallback.
+//   no table (name/address/authority/representative/nominee): phonetic transliteration.
 function arText(en, table) {
     const k = String(en == null ? '' : en).trim();
     if (!k) return '';
     if (k === 'N/A') return 'N/A';
-    if (AR_TR[k]) return AR_TR[k];
-    if (table) { const l = arLookup(table, en); if (l && l !== en) return l; }
-    return en;
-}
-// Gather every translatable text value for one batch request
-function collectTranslatable(d, enMap) {
-    const out = [];
-    (d.purchasers || []).forEach(function(p) {
-        out.push(p.name, p.address, p.city, p.country, p.nationality, p.guardianName);
-    });
-    if (d.company) {
-        const co = d.company;
-        out.push(co.name, co.address, co.city, co.country, co.authority, co.repName);
+    if (table) {
+        const l = arLookup(table, en);
+        if (l && l !== en) return l;   // found a proper Arabic term
     }
-    out.push(enMap['{UfCrm151778950656579}']);   // nominee name
-    out.push(enMap['{UfCrm151778950670679}']);   // nominee nationality
-    return out;
+    return translit(en);
 }
 
 /* ════════════════ STATE ════════════════ */
@@ -366,15 +434,6 @@ function getProp(product, id) {
         return v;
     }
     return '';
-}
-// Like getProp, but prefers the property's *_text value (Unit No = property_107_text).
-function getPropText(product, id) {
-    if (!product) return '';
-    let v = product['property_' + id + '_text'];
-    if (v === undefined || v === null) v = product['property' + id + '_text'];
-    if (Array.isArray(v)) v = v[0];
-    if (v !== undefined && v !== null && v !== '') return v;
-    return getProp(product, id);
 }
 function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
 
@@ -893,7 +952,7 @@ function buildEnMap(d) {
     m['{UfCrm151778950670679}']        = naIfEmpty(enumVal(C_NOM_NAT, field(c, deal, C_NOM_NAT))); // Nominee Nationality
     m['{UfCrm151778950686842}']        = naIfEmpty(field(c, deal, C_NOM_PASS));          // Nominee Passport
     m['{UfCrm151778950699925}']        = naIfEmpty(maybeDate(field(c, deal, C_NOM_EXP))); // Nominee Exp
-    m['{ProductsProductTitle}']        = getPropText(d.product, PROD_UNITNO) || d.unitName;  // Unit No (property 107)
+    m['{ProductsProductTitle}']        = d.unitName;                          // Unit No
     m['{UfCrm151778950723706}']        = field(c, deal, D_PARKING);           // Parking
     m['{ProductsProductProperty113}']  = sqftToSqm(getProp(d.product, PROD_AREA)); // Area in SqM
     m['{ProductsProductProperty177}']  = getProp(d.product, PROD_TYPE);        // Unit Type (property 177)
@@ -933,11 +992,6 @@ async function renderSpa(d) {
         throw e;
     }
     const enMap = buildEnMap(d);
-
-    // Translate text values to Arabic (name/address/city/country/nationality/company/nominee)
-    setStatus('Translating to Arabic…');
-    await translateBatch(collectTranslatable(d, enMap));
-    setStatus('Building document…');
 
     // 1) Arabic markers  {AR::inner}
     let out = skeleton.replace(/\{AR::([A-Za-z0-9_]+)\}/g, function(_, inner) {
